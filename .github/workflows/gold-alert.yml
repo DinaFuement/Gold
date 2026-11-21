@@ -1,0 +1,30 @@
+name: Daily gold alert
+
+on:
+  schedule:
+    - cron: "30 4 * * *"    # 10:00 AM IST (cron uses UTC)
+    - cron: "30 16 * * *"   # 10:00 PM IST
+  workflow_dispatch:         # manual "Run workflow" button
+  push:                      # saving this file also runs a test
+    branches: [main]
+    paths: [".github/workflows/gold-alert.yml"]
+
+jobs:
+  send-gold-email:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packages
+        run: pip install yfinance
+
+      - name: Send gold email
+        run: python gold_alert.py
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
