@@ -100,12 +100,21 @@ def build_email():
 
 # ---------- Step 4: send the email through Gmail ----------
 def send_email(subject, body):
-    user = os.environ["SMTP_USER"].strip()
-    password = "".join(os.environ["SMTP_PASS"].split())  # removes stray spaces/newlines
+    user = os.environ.get("SMTP_USER", "").strip()
+    password = "".join(os.environ.get("SMTP_PASS", "").split())  # removes stray spaces/newlines
+    to = os.environ.get("MAIL_TO", "").strip()
+
+    # Check the secrets first, so the error message is clear
+    missing = [n for n, v in (("SMTP_USER", user), ("SMTP_PASS", password), ("MAIL_TO", to)) if not v]
+    if missing:
+        raise RuntimeError("These GitHub secrets are missing or empty in THIS repo: " + ", ".join(missing))
+    if len(password) != 16:
+        raise RuntimeError(f"SMTP_PASS has {len(password)} characters. A Gmail App Password has exactly 16 letters.")
+
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = user
-    msg["To"] = os.environ["MAIL_TO"].strip()
+    msg["To"] = to
     msg.set_content(body)
 
     context = ssl.create_default_context()
@@ -123,8 +132,18 @@ def send_email(subject, body):
 
 
 if __name__ == "__main__":
-    subject, body = build_email()
-    print(body)
-    send_email(subject, body)
+    import sys
 
-    
+    try:
+        subject, body = build_email()
+    except Exception as e:  # price download or maths failed
+        print(f"::error::PRICE step failed - {type(e).__name__}: {e}")
+        sys.exit(1)
+
+    print(body)
+
+    try:
+        send_email(subject, body)
+    except Exception as e:  # Gmail login or send failed
+        print(f"::error::EMAIL step failed - {type(e).__name__}: {e}")
+        sys.exit(1)
