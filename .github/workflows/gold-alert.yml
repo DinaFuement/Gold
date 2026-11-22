@@ -2,10 +2,10 @@ name: Daily gold alert
 
 on:
   schedule:
-    - cron: "30 4 * * *"    # 10:00 AM IST (cron uses UTC)
-    - cron: "30 16 * * *"   # 10:00 PM IST
-  workflow_dispatch:         # manual "Run workflow" button
-  push:                      # saving this file also runs a test
+    - cron: "0 5 * * *" # 10:30 AM IST (cron uses UTC)
+    - cron: "30 16 * * *" # 10:00 PM IST
+  workflow_dispatch: # manual "Run workflow" button
+  push: # saving this file also runs a test
     branches: [main]
     paths: [".github/workflows/gold-alert.yml"]
 
@@ -28,4 +28,5 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
-          MCX_PREMIUM_PCT: ${{ vars.MCX_PREMIUM_PCT }}   # optional
+          MCX_PREMIUM_PCT: ${{ vars.MCX_PREMIUM_PCT }} # optional
+          RETAIL_PREMIUM_PCT: ${{ vars.RETAIL_PREMIUM_PCT }} # optional

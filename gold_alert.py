@@ -26,6 +26,13 @@ MCX_URL = "https://www.5paisa.com/commodity-trading/mcx-gold-price"
 # COMEX x USDINR (import duty etc). Change it in the workflow with MCX_PREMIUM_PCT.
 DEFAULT_PREMIUM_PCT = 16.3
 
+RETAIL_URL = "https://www.goodreturns.in/gold-rates/"
+# Used only when the Goodreturns page cannot be read: retail rate is about this
+# much above MCX (before GST and making charges). Change with RETAIL_PREMIUM_PCT.
+DEFAULT_RETAIL_PREMIUM_PCT = 2.7
+EXAMPLE_MAKING_PCT = 12   # making charge used in the shop-total example
+GST_PCT = 3
+
 
 def pct(new, old):
     return (new - old) / old * 100
@@ -118,6 +125,46 @@ def get_mcx(comex_last, comex_prev):
     }
 
 
+def parse_goodreturns(html):
+    """Reads today's 1-gram retail rates (24K, 22K) from the Goodreturns page."""
+    text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html, flags=re.S | re.I)
+    sep = r"(?:\s|<[^>]*>|\|)*"
+    row = re.compile(r"(?:^|>|\|)\s*1\s*" + sep + r"\u20b9\s*([0-9][0-9,]*)"
+                     + sep + r"\u20b9\s*([0-9][0-9,]*)")
+    for m0 in re.finditer(r"Today Gold Price Per Gram", text):
+        m = row.search(text[m0.start(): m0.start() + 1500])
+        if m:
+            return {"k24": _num(m.group(1)), "k22": _num(m.group(2))}
+    return None
+
+
+def get_retail(mcx_last):
+    """Retail (jeweller) rate per gram, before GST and making charges."""
+    mcx_gram = mcx_last / 10
+    try:
+        r = requests.get(
+            RETAIL_URL, timeout=25,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                   "AppleWebKit/537.36 Chrome/124 Safari/537.36"})
+        r.raise_for_status()
+        d = parse_goodreturns(r.text)
+        # safety check: retail should be close to MCX, and 22K about 92% of 24K
+        if d and 0.9 * mcx_gram < d["k24"] < 1.2 * mcx_gram \
+                and 0.88 < d["k22"] / d["k24"] < 0.95:
+            d["source"] = "Goodreturns (India average, updated daily)"
+            d["estimated"] = False
+            return d
+        print("Goodreturns page read, but numbers failed the safety check:", d)
+    except Exception as e:
+        print("Goodreturns page not available:", type(e).__name__, e)
+
+    prem = 1 + float(os.getenv("RETAIL_PREMIUM_PCT") or DEFAULT_RETAIL_PREMIUM_PCT) / 100
+    k24 = mcx_gram * prem
+    return {"k24": k24, "k22": k24 * K22,
+            "source": "ESTIMATE (MCX + retail premium) - Goodreturns page unavailable",
+            "estimated": True}
+
+
 # =====================================================================
 # STEP 3 - simple view for tomorrow (momentum of COMEX)
 # =====================================================================
@@ -160,12 +207,30 @@ def srs(v):
     return f"{'+' if v >= 0 else '-'}{rs(v)}"
 
 
+def retail_section(rt):
+    mult = (1 + EXAMPLE_MAKING_PCT / 100) * (1 + GST_PCT / 100)
+    out = (
+        "4) INDIA RETAIL rate (jeweller rate, before GST and making charges)\n"
+        f"   Source: {rt['source']}\n"
+        f"        {'1 gram':<14}{'8 gram'}\n"
+    )
+    for name, g1 in (("24K", rt["k24"]), ("22K", rt["k22"])):
+        out += f"   {name:<4} {rs(g1):>10}   {rs(g1 * 8):>11}\n"
+    out += (
+        f"   Example shop total for 8 gram ({EXAMPLE_MAKING_PCT}% making + {GST_PCT}% GST):\n"
+        f"   24K {rs(rt['k24'] * 8 * mult)}   |   22K {rs(rt['k22'] * 8 * mult)}\n"
+        "   (making charges differ by shop - ask your jeweller)\n\n"
+    )
+    return out
+
+
 LINE = "=" * 46
 
 
 def build_email():
     cx = get_comex()
     mx = get_mcx(cx["last"], cx["prev"])
+    rt = get_retail(mx["last"])
     view, buy, sell, why = outlook(cx["closes"])
 
     cx_chg = cx["last"] - cx["prev"]
@@ -200,8 +265,9 @@ def build_email():
         f"        {'1 gram (change)':<22}  {'8 gram (change)'}\n"
         + gram_row("24K", 1.0)
         + gram_row("22K", K22)
-        + "   Shop price will be higher: add 3% GST and the jeweller's making charges.\n\n"
-        f"4) VIEW FOR TOMORROW: {view}\n"
+        + "\n"
+        + retail_section(rt)
+        + f"5) VIEW FOR TOMORROW: {view}\n"
         f"   If you want to BUY : {buy}\n"
         f"   If you want to SELL: {sell}\n"
         f"   Why: {why}\n\n"
@@ -210,6 +276,10 @@ def build_email():
     if mx["estimated"]:
         body += ("\nNOTE: live MCX data could not be read this time, so the India numbers\n"
                  "are an estimate. Treat them as a guide to direction, not the exact MCX price.\n")
+
+    if rt["estimated"]:
+        body += ("\nNOTE: the retail rate could not be read from Goodreturns this time, so it\n"
+                 "is estimated from MCX. Check your jeweller for the exact rate.\n")
 
     subject = (f"Gold {datetime.now(ZoneInfo('Asia/Kolkata')):%d %b %I:%M %p} | "
                f"COMEX ${cx['last']:,.0f} {arrow(cx_pct)} | "
