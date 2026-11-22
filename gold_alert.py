@@ -7,6 +7,7 @@ India: MCX gold last trade (Rs per 10 g), read from the 5paisa MCX page.
        If that page cannot be read, the script uses an ESTIMATE
        (COMEX x USD/INR + MCX premium) and says so clearly in the email.
 """
+import html as htmllib
 import os
 import re
 import smtplib
@@ -50,6 +51,7 @@ def get_comex():
         "high": float(last["High"]),
         "low": float(last["Low"]),
         "date": h.index[-1].strftime("%d %b %Y"),
+        "day": h.index[-1].to_pydatetime(),
         "closes": h["Close"],
     }
 
@@ -191,6 +193,33 @@ def arrow(change):
     return f"{'▲' if change >= 0 else '▼'} {change:+.2f}%"
 
 
+def market_note(cx):
+    """Returns (title, text) if the market is closed (weekend/holiday), else None."""
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    last_txt = cx["day"].strftime("%A, %d %b %Y")
+    if now.weekday() >= 5:  # Saturday or Sunday
+        return ("WEEKEND - MARKETS CLOSED",
+                f"Prices below are the LAST TRADE of {last_txt}. New prices start on Monday.")
+    gap = (now.date() - cx["day"].date()).days
+    limit = 3 if now.weekday() == 0 else 1   # Monday may legitimately show Friday
+    if gap > limit:
+        return ("MARKET HOLIDAY - NO NEW TRADING",
+                f"Prices below are the LAST TRADE of {last_txt}.")
+    return None
+
+
+def to_html(body, note):
+    """HTML version of the email: a bold banner (if closed) + the report text."""
+    banner = ""
+    if note:
+        banner = ('<div style="background:#fff3cd;border:2px solid #e0a800;padding:12px;'
+                  'margin-bottom:14px;font-family:Arial,sans-serif;font-size:18px;color:#7a4b00">'
+                  f'<b>{htmllib.escape(note[0])}</b><br>'
+                  f'<b style="font-size:15px">{htmllib.escape(note[1])}</b></div>')
+    return (f'<html><body>{banner}<pre style="font-family:Consolas,Menlo,monospace;'
+            f'font-size:14px">{htmllib.escape(body)}</pre></body></html>')
+
+
 def indian(n):
     """123456 -> 1,23,456 (Indian digit grouping)."""
     s = str(abs(int(round(n))))
@@ -281,16 +310,22 @@ def build_email():
         body += ("\nNOTE: the retail rate could not be read from Goodreturns this time, so it\n"
                  "is estimated from MCX. Check your jeweller for the exact rate.\n")
 
+    note = market_note(cx)
+    if note:
+        body = f"*** {note[0]} ***\n{note[1]}\n\n" + body
+
     subject = (f"Gold {datetime.now(ZoneInfo('Asia/Kolkata')):%d %b %I:%M %p} | "
                f"COMEX ${cx['last']:,.0f} {arrow(cx_pct)} | "
                f"MCX {rs(mx['last'])} {arrow(mx_pct)} | Tomorrow: {view}")
-    return subject, body
+    if note:
+        subject = f"[{note[0]}] " + subject
+    return subject, body, to_html(body, note)
 
 
 # =====================================================================
 # STEP 5 - send through Gmail
 # =====================================================================
-def send_email(subject, body):
+def send_email(subject, body, html=None):
     user = os.environ.get("SMTP_USER", "").strip()
     password = "".join(os.environ.get("SMTP_PASS", "").split())
     to = os.environ.get("MAIL_TO", "").strip()
@@ -304,6 +339,8 @@ def send_email(subject, body):
     msg = EmailMessage()
     msg["Subject"], msg["From"], msg["To"] = subject, user, to
     msg.set_content(body)
+    if html:
+        msg.add_alternative(html, subtype="html")
 
     context = ssl.create_default_context()
     try:
@@ -321,7 +358,7 @@ def send_email(subject, body):
 
 if __name__ == "__main__":
     try:
-        subject, body = build_email()
+        subject, body, html = build_email()
     except Exception as e:
         print(f"::error::PRICE step failed - {type(e).__name__}: {e}")
         sys.exit(1)
@@ -330,7 +367,7 @@ if __name__ == "__main__":
     print(body)
 
     try:
-        send_email(subject, body)
+        send_email(subject, body, html)
     except Exception as e:
         print(f"::error::EMAIL step failed - {type(e).__name__}: {e}")
         sys.exit(1)
