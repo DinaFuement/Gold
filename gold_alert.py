@@ -208,18 +208,6 @@ def market_note(cx):
     return None
 
 
-def to_html(body, note):
-    """HTML version of the email: a bold banner (if closed) + the report text."""
-    banner = ""
-    if note:
-        banner = ('<div style="background:#fff3cd;border:2px solid #e0a800;padding:12px;'
-                  'margin-bottom:14px;font-family:Arial,sans-serif;font-size:18px;color:#7a4b00">'
-                  f'<b>{htmllib.escape(note[0])}</b><br>'
-                  f'<b style="font-size:15px">{htmllib.escape(note[1])}</b></div>')
-    return (f'<html><body>{banner}<pre style="font-family:Consolas,Menlo,monospace;'
-            f'font-size:14px">{htmllib.escape(body)}</pre></body></html>')
-
-
 def indian(n):
     """123456 -> 1,23,456 (Indian digit grouping)."""
     s = str(abs(int(round(n))))
@@ -251,6 +239,177 @@ def retail_section(rt):
         "   (making charges differ by shop - ask your jeweller)\n\n"
     )
     return out
+
+
+# ---------- HTML email design (works on phone and web) ----------
+GREEN, RED, AMBER = "#16a34a", "#dc2626", "#b45309"
+
+
+def _e(text):
+    return htmllib.escape(str(text))
+
+
+def _rup(v):
+    return "\u20b9" + indian(v)
+
+
+def _srup(v):
+    return ("+" if v >= 0 else "-") + _rup(v)
+
+
+def _tone(change):
+    return GREEN if change >= 0 else RED
+
+
+def _chip(text, color):
+    bg = "#dcfce7" if color == GREEN else "#fee2e2"
+    return (f'<span style="display:inline-block;background:{bg};color:{color};font-weight:bold;'
+            f'font-size:14px;padding:4px 12px;border-radius:14px">{text}</span>')
+
+
+def _row(label, value):
+    return ('<tr>'
+            f'<td style="padding:7px 0;color:#6b7280;font-size:14px;border-top:1px solid #f1f5f9">{label}</td>'
+            f'<td align="right" style="padding:7px 0;color:#111827;font-size:14px;font-weight:bold;'
+            f'border-top:1px solid #f1f5f9">{value}</td></tr>')
+
+
+def _card(title, inner, accent="#d4a017"):
+    return ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+            f'style="background:#ffffff;border-radius:14px;margin:0 0 14px 0;border-top:4px solid {accent}">'
+            '<tr><td style="padding:16px 18px">'
+            f'<div style="font-size:12px;letter-spacing:1px;color:#6b7280;font-weight:bold;'
+            f'margin-bottom:10px">{title}</div>{inner}</td></tr></table>')
+
+
+def _note(text):
+    return ('<div style="background:#fffbeb;border:1px solid #f59e0b;color:#92400e;font-size:13px;'
+            f'padding:10px 12px;border-radius:10px;margin-top:10px">{_e(text)}</div>')
+
+
+def _gram_table(rows):
+    """rows: [(label, price_per_gram, change_per_gram_or_None)]"""
+    head = ('<tr>'
+            '<td style="font-size:12px;color:#6b7280;font-weight:bold;padding-bottom:6px">PURITY</td>'
+            '<td align="right" style="font-size:12px;color:#6b7280;font-weight:bold;padding-bottom:6px">1 GRAM</td>'
+            '<td align="right" style="font-size:12px;color:#6b7280;font-weight:bold;padding-bottom:6px">8 GRAM</td></tr>')
+    body = ""
+    for label, p1, c1 in rows:
+        def cell(price, chg):
+            sub = (f'<div style="font-size:13px;font-weight:bold;color:{_tone(chg)}">{_srup(chg)}</div>'
+                   if chg is not None else "")
+            return (f'<td align="right" style="padding:10px 0;border-top:1px solid #f1f5f9">'
+                    f'<div style="font-size:17px;font-weight:bold;color:#111827">{_rup(price)}</div>{sub}</td>')
+        body += (f'<tr><td style="padding:10px 0;border-top:1px solid #f1f5f9;font-size:17px;'
+                 f'font-weight:bold;color:#b45309">{label}</td>'
+                 + cell(p1, c1)
+                 + cell(p1 * 8, None if c1 is None else c1 * 8) + '</tr>')
+    return f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{head}{body}</table>'
+
+
+def to_html(r, note):
+    """Builds the phone + web friendly HTML email from the report data."""
+    view = r["view"]
+    col = {"UP": GREEN, "DOWN": RED}.get(view, AMBER)
+    bg = {"UP": "#f0fdf4", "DOWN": "#fef2f2"}.get(view, "#fffbeb")
+    sym = {"UP": "\u25b2", "DOWN": "\u25bc"}.get(view, "\u25ac")
+    cx, mx, rt = r["cx"], r["mx"], r["rt"]
+
+    banner = ""
+    if note:
+        banner = ('<div style="background:#fff3cd;border:2px solid #e0a800;color:#7a4b00;padding:14px;'
+                  'border-radius:12px;margin:0 0 14px 0;text-align:center">'
+                  f'<div style="font-size:18px;font-weight:bold">{_e(note[0])}</div>'
+                  f'<div style="font-size:15px;font-weight:bold;margin-top:4px">{_e(note[1])}</div></div>')
+
+    header = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+              'style="background:#111827;border-radius:14px;margin:0 0 14px 0"><tr>'
+              '<td style="padding:18px">'
+              '<div style="font-size:22px;font-weight:bold;color:#fbbf24">&#129689; Gold Daily Report</div>'
+              f'<div style="font-size:13px;color:#9ca3af;margin-top:4px">{_e(r["when"])}</div>'
+              '</td></tr></table>')
+
+    hero = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+            f'style="background:{bg};border:2px solid {col};border-radius:14px;margin:0 0 14px 0">'
+            '<tr><td align="center" style="padding:18px">'
+            '<div style="font-size:12px;letter-spacing:1px;color:#6b7280;font-weight:bold">VIEW FOR TOMORROW</div>'
+            f'<div style="font-size:38px;font-weight:bold;color:{col};margin:6px 0">{sym} {_e(view)}</div>'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px">'
+            '<tr><td style="padding:8px 0;border-top:1px solid #e5e7eb;font-size:13px;color:#6b7280" width="38%">'
+            'If you want to BUY</td>'
+            f'<td style="padding:8px 0;border-top:1px solid #e5e7eb;font-size:15px;font-weight:bold;color:#111827">'
+            f'{_e(r["buy"])}</td></tr>'
+            '<tr><td style="padding:8px 0;border-top:1px solid #e5e7eb;font-size:13px;color:#6b7280">'
+            'If you want to SELL</td>'
+            f'<td style="padding:8px 0;border-top:1px solid #e5e7eb;font-size:15px;font-weight:bold;color:#111827">'
+            f'{_e(r["sell"])}</td></tr></table>'
+            f'<div style="font-size:13px;color:#4b5563;margin-top:8px;text-align:left">{_e(r["why"])}</div>'
+            '</td></tr></table>')
+
+    cx_inner = (
+        f'<div style="font-size:32px;font-weight:bold;color:#111827">${cx["last"]:,.2f}'
+        '<span style="font-size:14px;color:#6b7280;font-weight:normal"> per ounce</span></div>'
+        f'<div style="margin:8px 0 10px 0">{_chip(arrow(cx["pct"]), _tone(cx["chg"]))}</div>'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+        + _row("Previous close", f'${cx["prev"]:,.2f}')
+        + _row("Change", f'{"+" if cx["chg"] >= 0 else "-"}${abs(cx["chg"]):,.2f}')
+        + _row("Day range", f'${cx["low"]:,.2f} - ${cx["high"]:,.2f}')
+        + _row("Last trade date", _e(cx["date"]))
+        + '</table>')
+    cx_card = _card("&#127482;&#127480; US &middot; COMEX GOLD", cx_inner, "#2563eb")
+
+    rng = (f'{_rup(mx["low"])} - {_rup(mx["high"])}' if mx["low"] and mx["high"] else "not available")
+    mx_inner = (
+        f'<div style="font-size:32px;font-weight:bold;color:#111827">{_rup(mx["last"])}'
+        '<span style="font-size:14px;color:#6b7280;font-weight:normal"> per 10 gram (24K)</span></div>'
+        f'<div style="margin:8px 0 10px 0">{_chip(arrow(mx["pct"]), _tone(mx["chg"]))}</div>'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+        + _row("Previous close", _rup(mx["prev"]))
+        + _row("Change", _srup(mx["chg"]))
+        + _row("Day range", rng)
+        + '</table>'
+        f'<div style="font-size:12px;color:#9ca3af;margin-top:8px">Source: {_e(mx["source"])}</div>')
+    if mx["estimated"]:
+        mx_inner += _note("Live MCX data could not be read, so this is an estimate. "
+                          "Use it for direction, not the exact price.")
+    mx_card = _card("&#127470;&#127475; INDIA &middot; MCX GOLD", mx_inner, "#f97316")
+
+    mkt_card = _card("PRICE PER GRAM &middot; from MCX last trade",
+                     _gram_table([("24K", r["g24"], r["c24"]), ("22K", r["g22"], r["c22"])]),
+                     "#d4a017")
+
+    mult_txt = f'{EXAMPLE_MAKING_PCT}% making + {GST_PCT}% GST'
+    retail_inner = (
+        _gram_table([("24K", rt["k24"], None), ("22K", rt["k22"], None)])
+        + '<div style="background:#f8fafc;border-radius:10px;padding:12px;margin-top:12px">'
+        f'<div style="font-size:12px;color:#6b7280;font-weight:bold">SHOP TOTAL FOR 8 GRAM ({_e(mult_txt)})</div>'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px"><tr>'
+        f'<td style="font-size:15px;color:#111827"><b style="color:#b45309">24K</b> {_rup(r["t24"])}</td>'
+        f'<td align="right" style="font-size:15px;color:#111827"><b style="color:#b45309">22K</b> {_rup(r["t22"])}</td>'
+        '</tr></table>'
+        '<div style="font-size:12px;color:#9ca3af;margin-top:4px">Making charges differ by shop - ask your jeweller.</div>'
+        '</div>'
+        f'<div style="font-size:12px;color:#9ca3af;margin-top:8px">Rate before GST and making charges. '
+        f'Source: {_e(rt["source"])}</div>')
+    if rt["estimated"]:
+        retail_inner += _note("The retail rate could not be read this time, so it is estimated from MCX. "
+                              "Check your jeweller for the exact rate.")
+    retail_card = _card("INDIA RETAIL &middot; jeweller rate", retail_inner, "#16a34a")
+
+    footer = ('<div style="font-size:12px;color:#6b7280;text-align:center;padding:6px 8px 18px 8px;line-height:1.6">'
+              'Momentum-based indicator only, not financial advice.<br>'
+              'Check yourself: <a href="https://www.cmegroup.com" style="color:#2563eb">CME (COMEX)</a> &middot; '
+              '<a href="https://www.mcxindia.com" style="color:#2563eb">MCX</a> &middot; '
+              '<a href="https://www.goodreturns.in/gold-rates/" style="color:#2563eb">Goodreturns</a></div>')
+
+    return ('<!DOCTYPE html><html><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1"></head>'
+            '<body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
+            '<td align="center" style="padding:12px">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px"><tr><td>'
+            + header + banner + hero + cx_card + mx_card + mkt_card + retail_card + footer
+            + '</td></tr></table></td></tr></table></body></html>')
 
 
 LINE = "=" * 46
@@ -319,7 +478,19 @@ def build_email():
                f"MCX {rs(mx['last'])} {arrow(mx_pct)} | Tomorrow: {view}")
     if note:
         subject = f"[{note[0]}] " + subject
-    return subject, body, to_html(body, note)
+    mult = (1 + EXAMPLE_MAKING_PCT / 100) * (1 + GST_PCT / 100)
+    report = {
+        "when": when, "view": view, "buy": buy, "sell": sell, "why": why,
+        "cx": {"last": cx["last"], "prev": cx["prev"], "chg": cx_chg, "pct": cx_pct,
+               "low": cx["low"], "high": cx["high"], "date": cx["date"]},
+        "mx": {"last": mx["last"], "prev": mx["prev"], "chg": mx_chg, "pct": mx_pct,
+               "low": mx["low"], "high": mx["high"], "source": mx["source"],
+               "estimated": mx["estimated"]},
+        "g24": mx["last"] / 10, "c24": mx_chg / 10,
+        "g22": mx["last"] / 10 * K22, "c22": mx_chg / 10 * K22,
+        "rt": rt, "t24": rt["k24"] * 8 * mult, "t22": rt["k22"] * 8 * mult,
+    }
+    return subject, body, to_html(report, note)
 
 
 # =====================================================================
