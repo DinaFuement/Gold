@@ -20,7 +20,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install packages
-        run: pip install yfinance
+        run: pip install yfinance requests
 
       - name: Send gold email
         run: python gold_alert.py
@@ -28,3 +28,4 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
+          MCX_PREMIUM_PCT: ${{ vars.MCX_PREMIUM_PCT }}   # optional
