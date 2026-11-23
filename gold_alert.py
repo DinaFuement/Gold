@@ -13,7 +13,7 @@ import re
 import smtplib
 import ssl
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from zoneinfo import ZoneInfo
 
@@ -33,6 +33,12 @@ RETAIL_URL = "https://www.goodreturns.in/gold-rates/"
 DEFAULT_RETAIL_PREMIUM_PCT = 2.7
 EXAMPLE_MAKING_PCT = 12   # making charge used in the shop-total example
 GST_PCT = 3
+
+
+def ist_now():
+    """India time. A run delayed past midnight still counts as the previous evening."""
+    n = datetime.now(ZoneInfo("Asia/Kolkata"))
+    return n - timedelta(hours=1) if n.hour == 0 else n
 
 
 def pct(new, old):
@@ -183,7 +189,8 @@ def outlook(closes):
         view, buy, sell = "SIDEWAYS", "NEUTRAL - no clear direction", "NEUTRAL"
     why = (f"COMEX moved {today:+.2f}% on the last trading day and {week:+.2f}% over "
            f"5 sessions, and sits {'above' if above_avg else 'below'} its 5-day average.")
-    return view, buy, sell, why
+    vol = float(closes.pct_change().abs().tail(10).mean() * 100)   # typical daily move, %
+    return view, buy, sell, why, vol
 
 
 # =====================================================================
@@ -195,7 +202,7 @@ def arrow(change):
 
 def market_note(cx):
     """Returns (title, text) if the market is closed (weekend/holiday), else None."""
-    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    now = ist_now()
     last_txt = cx["day"].strftime("%A, %d %b %Y")
     if now.weekday() >= 5:  # Saturday or Sunday
         return ("WEEKEND - MARKETS CLOSED",
@@ -307,6 +314,61 @@ def _gram_table(rows):
     return f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{head}{body}</table>'
 
 
+def _move_card(r):
+    """How much the price moved (today) and how much it may move (next day), in rupees."""
+    sgn, vcol = r["sgn"], {"UP": GREEN, "DOWN": RED}.get(r["view"], AMBER)
+    sym = {"-": "&minus;", "+": "+", "+/-": "&plusmn;"}[sgn]
+    today_cap = "Last trade" if r["closed"] else "Today"
+    head = ('<tr><td style="font-size:12px;color:#6b7280;font-weight:bold;padding-bottom:6px" width="28%"></td>'
+            '<td align="right" style="font-size:12px;color:#6b7280;font-weight:bold;padding-bottom:6px">1 GRAM</td>'
+            '<td align="right" style="font-size:12px;color:#6b7280;font-weight:bold;padding-bottom:6px">8 GRAM</td></tr>')
+
+    def line(name, cap, a, b, color):
+        return ('<tr><td style="padding:9px 0;border-top:1px solid #f1f5f9">'
+                f'<div style="font-size:16px;font-weight:bold;color:#b45309">{name}</div>'
+                f'<div style="font-size:11px;color:#6b7280">{cap}</div></td>'
+                f'<td align="right" style="padding:9px 0;border-top:1px solid #f1f5f9;font-size:14px;'
+                f'font-weight:bold;color:{color}">{a}</td>'
+                f'<td align="right" style="padding:9px 0;border-top:1px solid #f1f5f9;font-size:14px;'
+                f'font-weight:bold;color:{color}">{b}</td></tr>')
+
+    def sw(pair):
+        return f'{sym}{_rup(pair[0])} to {_rup(pair[1])}'
+
+    swing_cap = f'{_e(r["short"])} swing (typical)'
+    rows = (line("24K", today_cap, _srup(r["c24"]), _srup(r["c24"] * 8), _tone(r["c24"]))
+            + line("22K", today_cap, _srup(r["c22"]), _srup(r["c22"] * 8), _tone(r["c22"]))
+            + line("24K", swing_cap, sw(r["sw24"]), sw(r["sw24_8"]), vcol)
+            + line("22K", swing_cap, sw(r["sw22"]), sw(r["sw22_8"]), vcol))
+    inner = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{head}{rows}</table>'
+             '<div style="font-size:12px;color:#9ca3af;margin-top:8px">'
+             f'Swing = typical daily move of the last 10 COMEX sessions (about &plusmn;{r["vol"]:.1f}%). '
+             'It shows the likely SIZE of a move, not a promise of direction.</div>')
+    return _card("RUPEE CHANGE &middot; moved and may move", inner, vcol)
+
+
+def _range_card(r):
+    """Morning: today's range so far. Evening / weekend: likely range for the next day."""
+    rg = r["rng"]
+    vcol = {"UP": GREEN, "DOWN": RED}.get(r["view"], AMBER)
+    head = ('<tr><td width="22%"></td>'
+            '<td align="right" style="font-size:12px;color:#6b7280;font-weight:bold;padding-bottom:6px">1 GRAM</td>'
+            '<td align="right" style="font-size:12px;color:#6b7280;font-weight:bold;padding-bottom:6px">8 GRAM</td></tr>')
+
+    def line(name, a, b):
+        cell = ('<td align="right" style="padding:9px 0;border-top:1px solid #f1f5f9;font-size:13px;'
+                'font-weight:bold;color:#111827">{}</td>')
+        return (f'<tr><td style="padding:9px 0;border-top:1px solid #f1f5f9;font-size:16px;'
+                f'font-weight:bold;color:#b45309">{name}</td>'
+                + cell.format(f"{_rup(a[0])} &ndash; {_rup(a[1])}")
+                + cell.format(f"{_rup(b[0])} &ndash; {_rup(b[1])}") + '</tr>')
+
+    rows = line("24K", rg["g24"], rg["g24_8"]) + line("22K", rg["g22"], rg["g22_8"])
+    inner = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{head}{rows}</table>'
+             f'<div style="font-size:12px;color:#9ca3af;margin-top:8px">{_e(rg["note"])}</div>')
+    return _card(_e(rg["title"]), inner, vcol)
+
+
 def to_html(r, note):
     """Builds the phone + web friendly HTML email from the report data."""
     view = r["view"]
@@ -322,17 +384,40 @@ def to_html(r, note):
                   f'<div style="font-size:18px;font-weight:bold">{_e(note[0])}</div>'
                   f'<div style="font-size:15px;font-weight:bold;margin-top:4px">{_e(note[1])}</div></div>')
 
+    t = mx["pct"]                       # today's MCX move decides the header colour
+    tword = "UP" if t > 0.05 else "DOWN" if t < -0.05 else "FLAT"
+    tsym = {"UP": "\u25b2", "DOWN": "\u25bc", "FLAT": "\u25ac"}[tword]
+    hbg = {"UP": "#15803d", "DOWN": "#b91c1c", "FLAT": "#b45309"}[tword]
+    hsub = {"UP": "#dcfce7", "DOWN": "#fee2e2", "FLAT": "#fef3c7"}[tword]
+    top_label = ("LAST TRADE PRICE (MCX INDIA)" if r["closed"]
+                 else "TODAY&#39;S FINAL CLOSE (MCX INDIA)" if r["final"]
+                 else "TODAY&#39;S PRICE SO FAR (MCX INDIA)")
+    vcol0 = {"UP": GREEN, "DOWN": RED}.get(view, AMBER)
+    vsym0 = {"UP": "\u25b2", "DOWN": "\u25bc"}.get(view, "\u25ac")
     header = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-              'style="background:#111827;border-radius:14px;margin:0 0 14px 0"><tr>'
+              f'style="background:{hbg};border-radius:14px;margin:0 0 14px 0"><tr>'
               '<td style="padding:18px">'
-              '<div style="font-size:22px;font-weight:bold;color:#fbbf24">&#129689; Gold Daily Report</div>'
-              f'<div style="font-size:13px;color:#9ca3af;margin-top:4px">{_e(r["when"])}</div>'
+              f'<div style="font-size:14px;font-weight:bold;color:{hsub}">&#129689; Gold Daily Report</div>'
+              f'<div style="font-size:12px;letter-spacing:1px;font-weight:bold;color:{hsub};margin-top:10px">'
+              f'{top_label}</div>'
+              f'<div style="font-size:34px;font-weight:bold;color:#ffffff;margin-top:2px">'
+              f'{tsym} {tword} {abs(t):.2f}%</div>'
+              f'<div style="font-size:14px;color:{hsub};margin-top:2px">'
+              f'COMEX (US) {_e(arrow(cx["pct"]))}</div>'
+              '<div style="margin-top:12px"><span style="display:inline-block;background:#ffffff;'
+              f'color:{vcol0};font-weight:bold;font-size:14px;padding:6px 14px;border-radius:16px">'
+              f'VIEW FOR {_e(r["label"])}: {vsym0} {_e(view)}</span></div>'
+              f'<div style="font-size:12px;color:{hsub};margin-top:10px">{_e(r["when"])}</div>'
               '</td></tr></table>')
+    preview = (f'{tsym} {tword} {abs(t):.2f}% today | 24K \u20b9{indian(r["g24"])}/g | '
+               f'8g \u20b9{indian(r["g24"] * 8)} | {r["short"]}: {view}')
+    preheader = ('<div style="display:none;max-height:0;overflow:hidden;font-size:1px;color:#f3f4f6;'
+                 f'line-height:1px">{_e(preview)}</div>')
 
     hero = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
             f'style="background:{bg};border:2px solid {col};border-radius:14px;margin:0 0 14px 0">'
             '<tr><td align="center" style="padding:18px">'
-            '<div style="font-size:12px;letter-spacing:1px;color:#6b7280;font-weight:bold">VIEW FOR TOMORROW</div>'
+            f'<div style="font-size:12px;letter-spacing:1px;color:#6b7280;font-weight:bold">VIEW FOR {_e(r["label"])}</div>'
             f'<div style="font-size:38px;font-weight:bold;color:{col};margin:6px 0">{sym} {_e(view)}</div>'
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px">'
             '<tr><td style="padding:8px 0;border-top:1px solid #e5e7eb;font-size:13px;color:#6b7280" width="38%">'
@@ -408,7 +493,7 @@ def to_html(r, note):
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
             '<td align="center" style="padding:12px">'
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px"><tr><td>'
-            + header + banner + hero + cx_card + mx_card + mkt_card + retail_card + footer
+            + preheader + header + banner + hero + _move_card(r) + _range_card(r) + cx_card + mx_card + mkt_card + retail_card + footer
             + '</td></tr></table></td></tr></table></body></html>')
 
 
@@ -419,7 +504,8 @@ def build_email():
     cx = get_comex()
     mx = get_mcx(cx["last"], cx["prev"])
     rt = get_retail(mx["last"])
-    view, buy, sell, why = outlook(cx["closes"])
+    view, buy, sell, why, vol = outlook(cx["closes"])
+    note = market_note(cx)
 
     cx_chg = cx["last"] - cx["prev"]
     mx_chg = mx["last"] - mx["prev"]
@@ -433,10 +519,53 @@ def build_email():
 
     cx_range = f"${cx['low']:,.2f} - ${cx['high']:,.2f}"
     mx_range = (f"{rs(mx['low'])} - {rs(mx['high'])}" if mx["low"] and mx["high"] else "not available")
+    ist = ist_now()
+    final = ist.hour >= 23            # the 11:45 PM email: MCX has closed for the day
     when = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d %b %Y, %I:%M %p IST")
+    if note or (ist.weekday() == 4 and ist.hour >= 15):
+        label, short = "NEXT TRADING DAY", "Next day"
+    elif ist.hour < 15:
+        label, short = "TODAY", "Today"
+    else:
+        label, short = "TOMORROW", "Tomorrow"
+
+    # typical swing in rupees (half to full typical daily move), rounded to nearest Rs 10
+    def swing(price):
+        hi = max(round(price * vol / 100, -1), 20)
+        lo = max(round(price * vol / 100 * 0.5, -1), 10)
+        return (min(lo, hi - 10), hi)
+
+    sgn = "-" if view == "DOWN" else "+" if view == "UP" else "+/-"
+
+    # price range: morning = today's real range so far (from MCX); evening/weekend = likely range next day
+    def around(price):
+        typ = max(round(price * vol / 100, -1), 20)
+        return (price - typ, price + typ)
+
+    has_day_range = bool(mx["low"] and mx["high"])
+    p24_, p22_ = mx["last"] / 10, mx["last"] / 10 * K22
+    if label == "TODAY" and has_day_range:
+        lo, hi = mx["low"] / 10, mx["high"] / 10
+        rng = {"g24": (lo, hi), "g24_8": (lo * 8, hi * 8),
+               "g22": (lo * K22, hi * K22), "g22_8": (lo * K22 * 8, hi * K22 * 8),
+               "title": "PRICE RANGE - TODAY SO FAR",
+               "note": "Real low and high traded on MCX so far today (24K). The day is not over yet."}
+    else:
+        when_txt = {"TODAY": "today", "TOMORROW": "tomorrow"}.get(label, "the next trading day")
+        rng = {"g24": around(p24_), "g24_8": around(p24_ * 8),
+               "g22": around(p22_), "g22_8": around(p22_ * 8),
+               "title": f"LIKELY PRICE RANGE - {label}",
+               "note": (f"{'Final MCX close' if final else 'Last price'} plus or minus a typical daily move (about {vol:.1f}%), for {when_txt}. "
+                        "An estimate of the size of the move, not a forecast.")}
+    p24, p22 = mx["last"] / 10, mx["last"] / 10 * K22
+
+    def swing_text(price):
+        lo, hi = swing(price)
+        return f"{sgn}{rs(lo)} to {rs(hi)}"
 
     body = (
         f"GOLD DAILY REPORT - {when}\n"
+        f"PRICE TODAY (MCX): {'UP' if mx_pct > 0.05 else 'DOWN' if mx_pct < -0.05 else 'FLAT'} {arrow(mx_pct)}\n"
         f"{LINE}\n\n"
         f"1) US - COMEX gold (USD per ounce)\n"
         f"   Last trade : ${cx['last']:,.2f}   (as of {cx['date']})\n"
@@ -455,10 +584,23 @@ def build_email():
         + gram_row("22K", K22)
         + "\n"
         + retail_section(rt)
-        + f"5) VIEW FOR TOMORROW: {view}\n"
+        + f"5) VIEW FOR {label}: {view}\n"
         f"   If you want to BUY : {buy}\n"
         f"   If you want to SELL: {sell}\n"
         f"   Why: {why}\n\n"
+        f"6) RUPEE CHANGE AND PRICE RANGE\n"
+        f"   Today (24K): {srs(mx_chg / 10)} per gram | {srs(mx_chg / 10 * 8)} per 8 gram\n"
+        f"   Today (22K): {srs(mx_chg / 10 * K22)} per gram | {srs(mx_chg / 10 * K22 * 8)} per 8 gram\n"
+        f"   Typical swing for {label}: about +-{vol:.1f}% (last 10 sessions)\n"
+        f"   24K: {swing_text(p24)} per gram | {swing_text(p24 * 8)} per 8 gram\n"
+        f"   22K: {swing_text(p22)} per gram | {swing_text(p22 * 8)} per 8 gram\n"
+        "   (size of a likely move, not a promise of direction)\n"
+        f"   {rng['title'].title()}:\n"
+        f"   24K: {rs(rng['g24'][0])} - {rs(rng['g24'][1])} per gram | "
+        f"{rs(rng['g24_8'][0])} - {rs(rng['g24_8'][1])} per 8 gram\n"
+        f"   22K: {rs(rng['g22'][0])} - {rs(rng['g22'][1])} per gram | "
+        f"{rs(rng['g22_8'][0])} - {rs(rng['g22_8'][1])} per 8 gram\n"
+        f"   ({rng['note']})\n\n"
         "Momentum-based indicator only, not financial advice.\n"
     )
     if mx["estimated"]:
@@ -469,15 +611,15 @@ def build_email():
         body += ("\nNOTE: the retail rate could not be read from Goodreturns this time, so it\n"
                  "is estimated from MCX. Check your jeweller for the exact rate.\n")
 
-    note = market_note(cx)
     if note:
         body = f"*** {note[0]} ***\n{note[1]}\n\n" + body
 
-    subject = (f"Gold {datetime.now(ZoneInfo('Asia/Kolkata')):%d %b %I:%M %p} | "
-               f"COMEX ${cx['last']:,.0f} {arrow(cx_pct)} | "
-               f"MCX {rs(mx['last'])} {arrow(mx_pct)} | Tomorrow: {view}")
-    if note:
-        subject = f"[{note[0]}] " + subject
+    dot = "\U0001F7E2" if mx_pct > 0.05 else "\U0001F534" if mx_pct < -0.05 else "\U0001F7E1"
+    word = "UP" if mx_pct > 0.05 else "DOWN" if mx_pct < -0.05 else "FLAT"
+    tag = ((note[0].split(" - ")[0] + " | ") if note            # WEEKEND / MARKET HOLIDAY
+           else "FINAL CLOSE | " if final else "")
+    subject = (f"{dot} {tag}Gold {word} {arrow(mx_pct)} | MCX {rs(mx['last'])} | "
+               f"COMEX ${cx['last']:,.0f} {arrow(cx_pct)} | {short}: {view}")
     mult = (1 + EXAMPLE_MAKING_PCT / 100) * (1 + GST_PCT / 100)
     report = {
         "when": when, "view": view, "buy": buy, "sell": sell, "why": why,
@@ -489,6 +631,8 @@ def build_email():
         "g24": mx["last"] / 10, "c24": mx_chg / 10,
         "g22": mx["last"] / 10 * K22, "c22": mx_chg / 10 * K22,
         "rt": rt, "t24": rt["k24"] * 8 * mult, "t22": rt["k22"] * 8 * mult,
+        "label": label, "short": short, "vol": vol, "closed": bool(note), "final": final, "sgn": sgn, "rng": rng,
+        "sw24": swing(p24), "sw24_8": swing(p24 * 8), "sw22": swing(p22), "sw22_8": swing(p22 * 8),
     }
     return subject, body, to_html(report, note)
 
