@@ -376,6 +376,7 @@ def to_html(r, note):
     bg = {"UP": "#f0fdf4", "DOWN": "#fef2f2"}.get(view, "#fffbeb")
     sym = {"UP": "\u25b2", "DOWN": "\u25bc"}.get(view, "\u25ac")
     cx, mx, rt = r["cx"], r["mx"], r["rt"]
+    ed = r["ed"]
 
     banner = ""
     if note:
@@ -398,6 +399,9 @@ def to_html(r, note):
               f'style="background:{hbg};border-radius:14px;margin:0 0 14px 0"><tr>'
               '<td style="padding:18px">'
               f'<div style="font-size:14px;font-weight:bold;color:{hsub}">&#129689; Gold Daily Report</div>'
+              f'<div style="font-size:14px;font-weight:bold;color:#ffffff;margin-top:8px">'
+              f'{_e(ed["icon"])} {_e(ed["head"])}</div>'
+              f'<div style="font-size:12px;color:{hsub};margin-top:2px">{_e(ed["next"])}</div>'
               f'<div style="font-size:12px;letter-spacing:1px;font-weight:bold;color:{hsub};margin-top:10px">'
               f'{top_label}</div>'
               f'<div style="font-size:34px;font-weight:bold;color:#ffffff;margin-top:2px">'
@@ -409,7 +413,7 @@ def to_html(r, note):
               f'VIEW FOR {_e(r["label"])}: {vsym0} {_e(view)}</span></div>'
               f'<div style="font-size:12px;color:{hsub};margin-top:10px">{_e(r["when"])}</div>'
               '</td></tr></table>')
-    preview = (f'{tsym} {tword} {abs(t):.2f}% today | 24K \u20b9{indian(r["g24"])}/g | '
+    preview = (f'{ed["short"]}: {tsym} {tword} {abs(t):.2f}% today | 24K \u20b9{indian(r["g24"])}/g | '
                f'8g \u20b9{indian(r["g24"] * 8)} | {r["short"]}: {view}')
     preheader = ('<div style="display:none;max-height:0;overflow:hidden;font-size:1px;color:#f3f4f6;'
                  f'line-height:1px">{_e(preview)}</div>')
@@ -522,6 +526,24 @@ def build_email():
     ist = ist_now()
     final = ist.hour >= 23            # the 11:45 PM email: MCX has closed for the day
     when = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d %b %Y, %I:%M %p IST")
+
+    # which of the 3 daily emails is this? (GitHub tells us if it was a scheduled or manual run)
+    manual = os.getenv("GITHUB_EVENT_NAME", "schedule") != "schedule"
+    if manual:
+        ed = {"icon": "\U0001F9EA", "head": "TEST RUN (manual) \u00b7 not a scheduled email", "next": "",
+              "short": "Test run", "line": "TEST RUN (manual) - not a scheduled email"}
+    elif ist.hour < 15:
+        ed = {"icon": "\U0001F559", "head": "MORNING REPORT \u00b7 10:30 AM \u00b7 email 1 of 3",
+              "next": "Next report: 10:00 PM tonight", "short": "Morning 10:30 AM",
+              "line": "Morning report (10:30 AM) - email 1 of 3 today | Next: 10:00 PM tonight"}
+    elif ist.hour < 23:
+        ed = {"icon": "\U0001F319", "head": "EVENING REPORT \u00b7 10:00 PM \u00b7 email 2 of 3",
+              "next": "Next report: 11:45 PM tonight (final close)", "short": "Evening 10 PM",
+              "line": "Evening report (10:00 PM) - email 2 of 3 today | Next: 11:45 PM tonight (final close)"}
+    else:
+        ed = {"icon": "\U0001F514", "head": "FINAL CLOSE REPORT \u00b7 11:45 PM \u00b7 email 3 of 3",
+              "next": "Next report: 10:30 AM tomorrow", "short": "FINAL CLOSE 11:45 PM",
+              "line": "Final close report (11:45 PM) - email 3 of 3 today | Next: 10:30 AM tomorrow"}
     if note or (ist.weekday() == 4 and ist.hour >= 15):
         label, short = "NEXT TRADING DAY", "Next day"
     elif ist.hour < 15:
@@ -566,6 +588,7 @@ def build_email():
     body = (
         f"GOLD DAILY REPORT - {when}\n"
         f"PRICE TODAY (MCX): {'UP' if mx_pct > 0.05 else 'DOWN' if mx_pct < -0.05 else 'FLAT'} {arrow(mx_pct)}\n"
+        f"EMAIL: {ed['line']}\n"
         f"{LINE}\n\n"
         f"1) US - COMEX gold (USD per ounce)\n"
         f"   Last trade : ${cx['last']:,.2f}   (as of {cx['date']})\n"
@@ -616,8 +639,7 @@ def build_email():
 
     dot = "\U0001F7E2" if mx_pct > 0.05 else "\U0001F534" if mx_pct < -0.05 else "\U0001F7E1"
     word = "UP" if mx_pct > 0.05 else "DOWN" if mx_pct < -0.05 else "FLAT"
-    tag = ((note[0].split(" - ")[0] + " | ") if note            # WEEKEND / MARKET HOLIDAY
-           else "FINAL CLOSE | " if final else "")
+    tag = " \u00b7 ".join(([note[0].split(" - ")[0]] if note else []) + [ed["short"]]) + " | "
     subject = (f"{dot} {tag}Gold {word} {arrow(mx_pct)} | MCX {rs(mx['last'])} | "
                f"COMEX ${cx['last']:,.0f} {arrow(cx_pct)} | {short}: {view}")
     mult = (1 + EXAMPLE_MAKING_PCT / 100) * (1 + GST_PCT / 100)
@@ -631,7 +653,7 @@ def build_email():
         "g24": mx["last"] / 10, "c24": mx_chg / 10,
         "g22": mx["last"] / 10 * K22, "c22": mx_chg / 10 * K22,
         "rt": rt, "t24": rt["k24"] * 8 * mult, "t22": rt["k22"] * 8 * mult,
-        "label": label, "short": short, "vol": vol, "closed": bool(note), "final": final, "sgn": sgn, "rng": rng,
+        "label": label, "short": short, "vol": vol, "closed": bool(note), "final": final, "ed": ed, "sgn": sgn, "rng": rng,
         "sw24": swing(p24), "sw24_8": swing(p24 * 8), "sw22": swing(p22), "sw22_8": swing(p22 * 8),
     }
     return subject, body, to_html(report, note)
