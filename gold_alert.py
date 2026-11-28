@@ -696,14 +696,23 @@ def build_email():
 # =====================================================================
 # STEP 5 - send through Gmail
 # =====================================================================
+def parse_recipients(raw):
+    """MAIL_TO can hold one or more addresses separated by commas, spaces or semicolons."""
+    return [a for a in re.split(r"[,\s;]+", raw or "") if a]
+
+
 def send_email(subject, body, html=None):
     user = os.environ.get("SMTP_USER", "").strip()
     password = "".join(os.environ.get("SMTP_PASS", "").split())
-    to = os.environ.get("MAIL_TO", "").strip()
+    recipients = parse_recipients(os.environ.get("MAIL_TO", ""))
+    to = ", ".join(recipients)
 
     missing = [n for n, v in (("SMTP_USER", user), ("SMTP_PASS", password), ("MAIL_TO", to)) if not v]
     if missing:
         raise RuntimeError("These GitHub secrets are missing or empty: " + ", ".join(missing))
+    bad = [a for a in recipients if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", a)]
+    if bad:
+        raise RuntimeError("MAIL_TO has an address that does not look right: " + ", ".join(bad))
     if len(password) != 16:
         raise RuntimeError(f"SMTP_PASS has {len(password)} characters. A Gmail App Password has exactly 16.")
 
