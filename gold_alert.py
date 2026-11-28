@@ -394,6 +394,9 @@ def to_html(r, note):
                  else "TODAY&#39;S FINAL CLOSE (MCX INDIA)" if r["final"]
                  else "TODAY&#39;S PRICE SO FAR (MCX INDIA)")
     vcol0 = {"UP": GREEN, "DOWN": RED}.get(view, AMBER)
+    timing_html = ('<div style="background:#fff3cd;color:#7a4b00;font-size:12px;padding:8px 10px;'
+                   'border-radius:8px;margin-top:10px">&#9201; ' + _e(ed["timing"]) + '</div>'
+                   if ed.get("timing") else "")
     vsym0 = {"UP": "\u25b2", "DOWN": "\u25bc"}.get(view, "\u25ac")
     header = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
               f'style="background:{hbg};border-radius:14px;margin:0 0 14px 0"><tr>'
@@ -402,6 +405,7 @@ def to_html(r, note):
               f'<div style="font-size:14px;font-weight:bold;color:#ffffff;margin-top:8px">'
               f'{_e(ed["icon"])} {_e(ed["head"])}</div>'
               f'<div style="font-size:12px;color:{hsub};margin-top:2px">{_e(ed["next"])}</div>'
+              f'{timing_html}'
               f'<div style="font-size:12px;letter-spacing:1px;font-weight:bold;color:{hsub};margin-top:10px">'
               f'{top_label}</div>'
               f'<div style="font-size:34px;font-weight:bold;color:#ffffff;margin-top:2px">'
@@ -524,19 +528,38 @@ def build_email():
     cx_range = f"${cx['low']:,.2f} - ${cx['high']:,.2f}"
     mx_range = (f"{rs(mx['low'])} - {rs(mx['high'])}" if mx["low"] and mx["high"] else "not available")
     ist = ist_now()
-    final = ist.hour >= 23            # the 11:45 PM email: MCX has closed for the day
-    when = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d %b %Y, %I:%M %p IST")
+    real = datetime.now(ZoneInfo("Asia/Kolkata"))           # the real clock time
+    when = real.strftime("%d %b %Y, %I:%M %p IST")
 
-    # which of the 3 daily emails is this? (GitHub tells us if it was a scheduled or manual run)
-    manual = os.getenv("GITHUB_EVENT_NAME", "schedule") != "schedule"
-    if manual:
+    # Which of the 3 daily emails is this? GitHub tells us which schedule line started the run,
+    # so the label never depends on the clock (a re-run or a late start cannot mislabel it).
+    SLOTS = {                                  # cron line (UTC) -> (key, time in IST, hour)
+        "0 5 * * *": ("morning", "10:30 AM", 10.5),
+        "30 16 * * *": ("evening", "10:00 PM", 22.0),
+        "15 18 * * *": ("final", "11:45 PM", 23.75),
+    }
+    event = os.getenv("GITHUB_EVENT_NAME", "schedule")
+    cron = os.getenv("SCHEDULE_CRON", "").strip()
+    manual = event != "schedule"
+    slot = SLOTS.get(cron)
+    if slot is None and not manual and not cron:     # older workflow without SCHEDULE_CRON: use the clock
+        h = ist.hour
+        slot = SLOTS["0 5 * * *"] if h < 15 else SLOTS["30 16 * * *"] if h < 23 else SLOTS["15 18 * * *"]
+    key = slot[0] if slot else ("manual" if manual else "other")
+    final = key == "final"                    # the 11:45 PM email: MCX has closed for the day
+    night = key in ("evening", "final")
+
+    if key == "manual":
         ed = {"icon": "\U0001F9EA", "head": "TEST RUN (manual) \u00b7 not a scheduled email", "next": "",
               "short": "Test run", "line": "TEST RUN (manual) - not a scheduled email"}
-    elif ist.hour < 15:
+    elif key == "other":
+        ed = {"icon": "\U0001F4E8", "head": f"SCHEDULED RUN \u00b7 unrecognised time (cron: {cron})", "next": "",
+              "short": "Scheduled run", "line": f"Scheduled run - unrecognised time (cron: {cron})"}
+    elif key == "morning":
         ed = {"icon": "\U0001F559", "head": "MORNING REPORT \u00b7 10:30 AM \u00b7 email 1 of 3",
               "next": "Next report: 10:00 PM tonight", "short": "Morning 10:30 AM",
               "line": "Morning report (10:30 AM) - email 1 of 3 today | Next: 10:00 PM tonight"}
-    elif ist.hour < 23:
+    elif key == "evening":
         ed = {"icon": "\U0001F319", "head": "EVENING REPORT \u00b7 10:00 PM \u00b7 email 2 of 3",
               "next": "Next report: 11:45 PM tonight (final close)", "short": "Evening 10 PM",
               "line": "Evening report (10:00 PM) - email 2 of 3 today | Next: 11:45 PM tonight (final close)"}
@@ -544,9 +567,19 @@ def build_email():
         ed = {"icon": "\U0001F514", "head": "FINAL CLOSE REPORT \u00b7 11:45 PM \u00b7 email 3 of 3",
               "next": "Next report: 10:30 AM tomorrow", "short": "FINAL CLOSE 11:45 PM",
               "line": "Final close report (11:45 PM) - email 3 of 3 today | Next: 10:30 AM tomorrow"}
-    if note or (ist.weekday() == 4 and ist.hour >= 15):
+
+    # timing check: was it sent far from its own slot? (re-run, or a GitHub delay)
+    ed["timing"] = ""
+    if slot:
+        diff = (real.hour + real.minute / 60 - slot[2] + 12) % 24 - 12
+        if abs(diff) > 0.75:
+            ed["timing"] = (f"Sent at {real.strftime('%I:%M %p')} IST, but this email's slot is {slot[1]}: "
+                            f"about {abs(diff):.1f} hours {'late' if diff > 0 else 'early'}. "
+                            "A re-run of an older run can cause this.")
+
+    if note or (ist.weekday() == 4 and (night or ist.hour >= 15)):
         label, short = "NEXT TRADING DAY", "Next day"
-    elif ist.hour < 15:
+    elif key == "morning" or (key in ("manual", "other") and ist.hour < 15):
         label, short = "TODAY", "Today"
     else:
         label, short = "TOMORROW", "Tomorrow"
@@ -589,6 +622,7 @@ def build_email():
         f"GOLD DAILY REPORT - {when}\n"
         f"PRICE TODAY (MCX): {'UP' if mx_pct > 0.05 else 'DOWN' if mx_pct < -0.05 else 'FLAT'} {arrow(mx_pct)}\n"
         f"EMAIL: {ed['line']}\n"
+        f"{'TIMING: ' + ed['timing'] + chr(10) if ed.get('timing') else ''}"
         f"{LINE}\n\n"
         f"1) US - COMEX gold (USD per ounce)\n"
         f"   Last trade : ${cx['last']:,.2f}   (as of {cx['date']})\n"

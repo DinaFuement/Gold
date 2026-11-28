@@ -29,5 +29,6 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
+          SCHEDULE_CRON: ${{ github.event.schedule }}   # tells the script which email slot this is
           MCX_PREMIUM_PCT: ${{ vars.MCX_PREMIUM_PCT }}         # optional
           RETAIL_PREMIUM_PCT: ${{ vars.RETAIL_PREMIUM_PCT }}   # optional
